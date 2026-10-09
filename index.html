@@ -275,35 +275,52 @@ function b64urlFromHex(h) {
   let s = ''; h.match(/../g).forEach(x => s += String.fromCharCode(parseInt(x, 16)));
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
-function enrollPayload(s) {
+async function latestApk() {
+  try {
+    const r = await fetch('https://api.github.com/repos/irfan347/Installlock/releases/latest');
+    const j = await r.json();
+    const a = (j.assets || []).find(x => x.name === 'installlock.apk');
+    if (a) return a.browser_download_url;
+  } catch (e) { }
+  return CONFIG.APK_URL;
+}
+function enrollPayload(s, apkUrl, test) {
   return {
     'android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME': 'com.example.installlock/.AdminReceiver',
-    'android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION': CONFIG.APK_URL,
+    'android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION': apkUrl,
     'android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM': b64urlFromHex(CONFIG.CERT_SHA256),
     'android.app.extra.PROVISIONING_SKIP_ENCRYPTION': true,
     'android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED': true,
     'android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE': {
-      server: CONFIG.SUPABASE_URL, anon_key: CONFIG.SUPABASE_KEY, sale_id: s.id, token: s.device_token
+      server: CONFIG.SUPABASE_URL, anon_key: CONFIG.SUPABASE_KEY, sale_id: s.id, token: s.device_token, test_mode: !!test
     }
   };
 }
-function showQR(id) {
+async function showQR(id) {
   const s = cache.sales[id];
-  const text = JSON.stringify(enrollPayload(s));
+  const apk = await latestApk();
   const m = document.createElement('div'); m.className = 'modal';
   m.innerHTML = `<div class="box"><h2>${esc(s.customer_name)} ka enrollment QR</h2>
     <div class="note"><b>Ye QR sirf isi customer ke phone ke liye hai.</b> Kisi aur ko na dikhayein.<br>
     Naye / factory reset phone ki pehli screen par 6 baar tap karein, phir camera se ye QR scan karein.
     QR kisi doosre phone ya screen par kholna hoga.</div>
-    <canvas id="qrc"></canvas><button class="btn ghost" data-act="closeModal">Band karein</button></div>`;
+    <label style="display:flex;color:var(--tx);font-size:14px;margin-bottom:10px"><input id="qtest" type="checkbox" checked>TEST mode: factory reset block nahi hoga. Asli customer ke phone ke liye ye tick hata dein.</label>
+    <canvas id="qrc"></canvas>
+    <p class="muted" style="word-break:break-all">APK: ${esc(apk)}</p>
+    <button class="btn ghost" data-act="closeModal">Band karein</button></div>`;
   document.body.appendChild(m);
-  try {
-    const q = qrcode(0, 'L'); q.addData(text, 'Byte'); q.make();
-    const n = q.getModuleCount(), sc = Math.max(3, Math.floor(600 / (n + 8))), size = (n + 8) * sc;
-    const c = $('#qrc'); c.width = c.height = size;
-    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, size, size); x.fillStyle = '#000';
-    for (let r = 0; r < n; r++) for (let k = 0; k < n; k++) if (q.isDark(r, k)) x.fillRect((k + 4) * sc, (r + 4) * sc, sc, sc);
-  } catch (e) { $('#qrc').replaceWith(Object.assign(document.createElement('p'), { textContent: 'QR nahi ban saka: ' + e.message })); }
+  const draw = () => {
+    const text = JSON.stringify(enrollPayload(s, apk, $('#qtest').checked));
+    try {
+      const q = qrcode(0, 'L'); q.addData(text, 'Byte'); q.make();
+      const n = q.getModuleCount(), sc = Math.max(3, Math.floor(600 / (n + 8))), size = (n + 8) * sc;
+      const c = $('#qrc'); c.width = c.height = size;
+      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, size, size); x.fillStyle = '#000';
+      for (let r = 0; r < n; r++) for (let k = 0; k < n; k++) if (q.isDark(r, k)) x.fillRect((k + 4) * sc, (r + 4) * sc, sc, sc);
+    } catch (e) { toast('QR nahi ban saka: ' + e.message); }
+  };
+  $('#qtest').addEventListener('change', draw);
+  draw();
 }
 
 /* ---------- admin ---------- */
@@ -388,7 +405,7 @@ const H = {
     if (box.style.display === 'block') { box.style.display = 'none'; openSet.delete(d.id); }
     else { openSet.add(d.id); openDetail(d.id, me.role === 'admin'); }
   },
-  qr: (d) => showQR(d.id),
+  qr: (d, b) => busy(b, () => showQR(d.id)),
   markPaid: (d, b) => { if (!confirm(`Qist #${d.seq} ki wasooli confirm karein?`)) return; return busy(b, async () => { await rpc('mark_paid', { p_installment: d.id }); toast('Qist paid ho gayi'); await refreshView(); }); },
   lock: (d, b) => {
     const lock = d.v === '1';
