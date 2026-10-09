@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0f766e">
+<title>InstallLock</title>
+<style>
+:root{--bg:#f3f5f7;--card:#fff;--tx:#14202b;--mut:#64748b;--pri:#0f766e;--bd:#e2e8f0;--red:#b91c1c;--amb:#b45309;--blu:#1d4ed8}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--tx);font-size:16px}
+.wrap{max-width:720px;margin:0 auto;padding:12px 12px 80px}
+h1{font-size:24px;margin:16px 0 8px;text-align:center;color:var(--pri)}
+h2{font-size:18px;margin:0 0 10px}
+.top{display:flex;justify-content:space-between;align-items:center;padding:8px 2px 12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:12px}
+label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
+input,select{width:100%;padding:11px;border:1px solid #cbd5e1;border-radius:8px;font-size:16px;background:#fff}
+input[type=checkbox]{width:auto;margin-right:8px}
+input[type=file]{padding:8px}
+.btn{display:inline-block;background:var(--pri);color:#fff;border:0;border-radius:8px;padding:12px 16px;font-size:16px;margin-top:14px;width:100%}
+.btn.sm{width:auto;padding:8px 12px;font-size:14px;margin:6px 6px 0 0}
+.btn.ghost{background:#fff;color:var(--tx);border:1px solid #cbd5e1}
+.btn.red{background:var(--red)}
+.btn.blu{background:var(--blu)}
+.btn:disabled{opacity:.6}
+.tabs{display:flex;gap:6px;margin-bottom:12px;overflow-x:auto}
+.tabs button{flex:1;white-space:nowrap;padding:10px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;font-size:15px}
+.tabs button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
+.muted{color:var(--mut);font-size:14px}
+small{color:var(--mut)}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:600;background:#e2e8f0}
+.badge.pending{background:#fef3c7;color:var(--amb)}
+.badge.active{background:#dcfce7;color:#166534}
+.badge.rejected,.badge.suspended{background:#fee2e2;color:var(--red)}
+.badge.completed{background:#dbeafe;color:var(--blu)}
+.badge.paid{background:#dcfce7;color:#166534}
+.badge.submitted{background:#fef3c7;color:var(--amb)}
+.sale-h{display:flex;justify-content:space-between;gap:8px;cursor:pointer}
+.detail{margin-top:10px;border-top:1px solid var(--bd);padding-top:10px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{padding:6px 4px;border-bottom:1px solid var(--bd);text-align:left}
+.imgs{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.imgs img{width:31%;min-width:90px;aspect-ratio:3/4;object-fit:cover;border-radius:8px;border:1px solid var(--bd);background:#e2e8f0}
+#toast{position:fixed;left:12px;right:12px;bottom:16px;background:#111827;color:#fff;padding:12px;border-radius:10px;display:none;z-index:50;text-align:center}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:40;display:flex;align-items:center;justify-content:center;padding:12px}
+.modal .box{background:#fff;border-radius:12px;padding:14px;max-width:560px;width:100%;max-height:92vh;overflow:auto}
+.modal canvas{width:100%;height:auto;image-rendering:pixelated;border:1px solid var(--bd)}
+.note{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px;font-size:14px;margin:10px 0}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+<script>
+const CONFIG = {
+  SUPABASE_URL: 'https://twarcnmwyfvtfwzynnxp.supabase.co',
+  SUPABASE_KEY: 'sb_publishable_4k5Umc7wdYXchB3ojCUI8w_sAtLaJAT',
+  APK_URL: 'https://github.com/irfan347/Installlock/releases/download/build-1/installlock.apk',
+  CERT_SHA256: 'f945d8983bcc48226c696892d0479eb628b7b28db29ac911b12fb7b3f7b97775'
+};
+const sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = n => 'Rs. ' + Number(n || 0).toLocaleString('en-PK');
+const digits = s => String(s || '').replace(/\D/g, '');
+let me = null, openSet = new Set(), cache = { sales: {}, agents: {} }, curTab = '';
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 4000);
+}
+function render(html) { $('#app').innerHTML = html; }
+async function busy(btn, fn) {
+  const old = btn.textContent; btn.disabled = true; btn.textContent = 'Intezaar...';
+  try { await fn(); } catch (e) { toast(e.message || String(e)); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+
+async function compress(file, max = 1200, q = 0.7) {
+  const bmp = await createImageBitmap(file);
+  const r = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * r); c.height = Math.round(bmp.height * r);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  return await new Promise(res => c.toBlob(res, 'image/jpeg', q));
+}
+async function uploadPhoto(path, file) {
+  const blob = await compress(file);
+  const { error } = await sb.storage.from('docs').upload(path, blob, { contentType: 'image/jpeg' });
+  if (error) throw new Error('Photo upload nahi hui: ' + error.message);
+  return path;
+}
+async function loadImgs(root) {
+  const els = [...root.querySelectorAll('img[data-p]')];
+  if (!els.length) return;
+  const paths = [...new Set(els.map(e => e.dataset.p))];
+  const { data } = await sb.storage.from('docs').createSignedUrls(paths, 3600);
+  const m = {}; (data || []).forEach(d => { if (d.signedUrl) m[d.path] = d.signedUrl; });
+  els.forEach(e => { const u = m[e.dataset.p]; if (u) { e.src = u; e.onclick = () => window.open(u, '_blank'); } });
+}
+const img = (p, label) => p ? `<img data-p="${esc(p)}" alt="${esc(label)}" title="${esc(label)}">` : '';
+
+/* ---------- boot / auth ---------- */
+async function boot() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return showAuth('login');
+  const { data: p, error } = await sb.from('profiles').select('*').eq('id', session.user.id).single();
+  if (error || !p) { await sb.auth.signOut(); return showAuth('login'); }
+  me = p;
+  if (p.status !== 'active') return showWait();
+  if (p.role === 'admin') showAdmin('approvals'); else showAgent('sales');
+}
+
+function showAuth(mode) {
+  if (mode === 'login') {
+    render(`<div class="wrap"><h1>InstallLock</h1><div class="card"><h2>Login</h2>
+      <label>Email</label><input id="em" type="email" autocomplete="username">
+      <label>Password</label><input id="pw" type="password" autocomplete="current-password">
+      <button class="btn" data-act="login">Login</button>
+      <p class="muted">Naye dukaandar? <a href="#" data-act="goSignup">Agent banein</a></p></div></div>`);
+  } else {
+    render(`<div class="wrap"><h1>InstallLock</h1><div class="card"><h2>Dukaandar (Agent) registration</h2>
+      <p class="muted">Registration ke baad admin aap ki tasveerein dekh kar account approve karega. Tab tak login nahi chalega.</p>
+      <label>Dukaan ka naam</label><input id="shop">
+      <label>Aap ka naam</label><input id="owner">
+      <label>Phone number</label><input id="phone" type="tel" placeholder="03xxxxxxxxx">
+      <label>CNIC number (13 haroof)</label><input id="cnic" inputmode="numeric" placeholder="3520212345671">
+      <label>Dukaan ki tasveer</label><input id="f_shop" type="file" accept="image/*" capture="environment">
+      <label>CNIC ki tasveer</label><input id="f_cnic" type="file" accept="image/*" capture="environment">
+      <label>Email</label><input id="em" type="email" autocomplete="username">
+      <label>Password (kam az kam 8 haroof)</label><input id="pw" type="password" autocomplete="new-password">
+      <button class="btn" data-act="signup">Register karein</button>
+      <p class="muted"><a href="#" data-act="goLogin">Wapis login par</a></p></div></div>`);
+  }
+}
+
+function showWait() {
+  const msg = {
+    pending: 'Aap ka account approval ke intezaar mein hai. Admin tasveerein dekh kar approve karega.',
+    suspended: 'Aap ka account band kar diya gaya hai. Admin se rabta karein.',
+    rejected: 'Aap ki registration reject ho gayi hai. Admin se rabta karein.'
+  }[me.status] || 'Account active nahi hai.';
+  render(`<div class="wrap"><h1>InstallLock</h1><div class="card"><h2>${esc(me.shop_name || '')}</h2>
+    <p>${esc(msg)}</p>
+    <button class="btn" data-act="refresh">Dobara check karein</button>
+    <button class="btn ghost" data-act="logout">Logout</button></div></div>`);
+}
+
+const header = () => `<div class="top"><div><b>${esc(me.shop_name || 'Admin')}</b><br><small>${me.role === 'admin' ? 'Admin' : 'Dukaandar'}</small></div><button class="btn sm ghost" data-act="logout">Logout</button></div>`;
+
+/* ---------- agent ---------- */
+async function showAgent(t) {
+  curTab = t;
+  render(`<div class="wrap">${header()}<div class="tabs">
+    <button class="${t === 'new' ? 'on' : ''}" data-act="agentTab" data-t="new">Naya sale</button>
+    <button class="${t === 'sales' ? 'on' : ''}" data-act="agentTab" data-t="sales">Meri sales</button></div><div id="body"></div></div>`);
+  if (t === 'new') newSaleForm(); else await loadSales(false);
+}
+
+function newSaleForm() {
+  const d = new Date(); d.setDate(d.getDate() + 30);
+  const first = d.toISOString().slice(0, 10);
+  $('#body').innerHTML = `<div class="card"><h2>Naya customer / sale</h2>
+    <label>Customer ka naam</label><input id="c_name">
+    <label>Customer ka phone</label><input id="c_phone" type="tel">
+    <label>Customer ka CNIC (13 haroof)</label><input id="c_cnic" inputmode="numeric">
+    <label>Mobile model</label><input id="d_model" placeholder="Infinix Hot 40">
+    <label>IMEI (15 numbers, *#06# dial karke dekhein)</label><input id="d_imei" inputmode="numeric">
+    <div class="row"><div><label>Qeemat (Rs)</label><input id="price" type="number" inputmode="numeric"></div>
+    <div><label>Advance (Rs)</label><input id="adv" type="number" inputmode="numeric" value="0"></div></div>
+    <div class="row"><div><label>Qistein (tadaad)</label><input id="cnt" type="number" inputmode="numeric"></div>
+    <div><label>Har qist (Rs)</label><input id="amt" type="number" inputmode="numeric"></div></div>
+    <p class="muted" id="sum"></p>
+    <div class="row"><div><label>Pehli qist ki tareekh</label><input id="first" type="date" value="${first}"></div>
+    <div><label>Qiston ke darmiyan din</label><input id="interval" type="number" value="30"></div></div>
+    <label>Customer ki selfie (abhi camera se)</label><input id="f_selfie" type="file" accept="image/*" capture="user">
+    <label>CNIC aage ki tasveer</label><input id="f_front" type="file" accept="image/*" capture="environment">
+    <label>CNIC peeche ki tasveer</label><input id="f_back" type="file" accept="image/*" capture="environment">
+    <p style="margin-top:14px"><label style="display:flex;color:var(--tx);font-size:14px"><input id="consent" type="checkbox">Customer ko samjha diya hai ke qist waqt par ada na karne par phone lock ho jayega, aur us ne is ki rizamandi di hai.</label></p>
+    <button class="btn" data-act="submitSale">Approval ke liye bhejein</button></div>`;
+}
+
+async function submitSale() {
+  const v = id => $(id).value.trim();
+  const need = (c, m) => { if (!c) throw new Error(m); };
+  const cnic = digits(v('#c_cnic')), phone = digits(v('#c_phone')), imei = digits(v('#d_imei'));
+  const price = +v('#price'), adv = +v('#adv') || 0, cnt = parseInt(v('#cnt')), amt = +v('#amt');
+  need(v('#c_name'), 'Customer ka naam likhein');
+  need(phone.length >= 10, 'Phone number theek likhein');
+  need(cnic.length === 13, 'CNIC 13 numbers ka hona chahiye');
+  need(v('#d_model'), 'Mobile model likhein');
+  need(imei.length === 15, 'IMEI 15 numbers ka hona chahiye');
+  need(price > 0 && cnt > 0 && amt > 0, 'Qeemat, qistein aur qist ki rakam likhein');
+  need(adv >= 0 && adv < price, 'Advance qeemat se kam hona chahiye');
+  need(v('#first'), 'Pehli qist ki tareekh chunein');
+  const files = ['#f_selfie', '#f_front', '#f_back'].map(i => $(i).files[0]);
+  need(files.every(Boolean), 'Teeno tasveerein lagayein (selfie, CNIC aage, CNIC peeche)');
+  need($('#consent').checked, 'Customer ki rizamandi ka tick lagayein');
+  const id = crypto.randomUUID(), base = `${me.id}/sales/${id}`;
+  const selfie = await uploadPhoto(`${base}/selfie.jpg`, files[0]);
+  const front = await uploadPhoto(`${base}/front.jpg`, files[1]);
+  const back = await uploadPhoto(`${base}/back.jpg`, files[2]);
+  const { error } = await sb.from('sales').insert({
+    id, agent_id: me.id, customer_name: v('#c_name'), customer_phone: phone, customer_cnic: cnic,
+    device_model: v('#d_model'), imei, price, advance: adv, installments_count: cnt, installment_amount: amt,
+    first_due: v('#first'), interval_days: parseInt(v('#interval')) || 30,
+    selfie_path: selfie, cnic_front_path: front, cnic_back_path: back, consent: true
+  });
+  if (error) throw new Error(error.message);
+  toast('Sale approval ke liye bhej di gayi');
+  openSet.add(id);
+  showAgent('sales');
+}
+
+/* ---------- shared: sales list ---------- */
+async function loadSales(isAdmin, pendingOnly = false) {
+  let q = sb.from('sales').select('*').order('created_at', { ascending: false });
+  if (pendingOnly) q = q.eq('status', 'pending');
+  const { data, error } = await q;
+  if (error) { $('#body').innerHTML = `<div class="card">${esc(error.message)}</div>`; return; }
+  cache.sales = {}; data.forEach(s => cache.sales[s.id] = s);
+  if (isAdmin && !Object.keys(cache.agents).length) await loadAgentsCache();
+  const box = pendingOnly ? $('#sales-box') : $('#body');
+  if (!data.length) { box.innerHTML = `<div class="card muted">${pendingOnly ? 'Koi pending sale nahi.' : 'Abhi koi sale nahi.'}</div>`; return; }
+  box.innerHTML = (isAdmin && !pendingOnly ? `<input id="search" placeholder="Naam / phone / CNIC se dhoondhein" data-search="1" style="margin-bottom:10px">` : '') +
+    `<div id="list">${data.map(s => saleCard(s, isAdmin)).join('')}</div>`;
+  data.forEach(s => { if (openSet.has(s.id) || (pendingOnly && isAdmin)) openDetail(s.id, isAdmin); });
+}
+
+function saleCard(s, isAdmin) {
+  const a = cache.agents[s.agent_id];
+  const hay = [s.customer_name, s.customer_phone, s.customer_cnic].join(' ').toLowerCase();
+  return `<div class="card sale" id="s-${s.id}" data-hay="${esc(hay)}">
+    <div class="sale-h" data-act="toggle" data-id="${s.id}">
+      <div><b>${esc(s.customer_name)}</b><br><small>${esc(s.device_model)} &middot; ${s.installments_count} x ${money(s.installment_amount)}</small>
+      ${isAdmin && a ? `<br><small>Dukaan: ${esc(a.shop_name)}</small>` : ''}</div>
+      <div><span class="badge ${s.status}">${s.status}</span>${s.locked ? '<br><span class="badge rejected">LOCKED</span>' : ''}</div>
+    </div><div class="detail" id="d-${s.id}" style="display:none"></div></div>`;
+}
+
+async function openDetail(id, isAdmin) {
+  const s = cache.sales[id], box = $('#d-' + id);
+  if (!s || !box) return;
+  box.style.display = 'block';
+  box.innerHTML = '<p class="muted">Load ho raha hai...</p>';
+  const { data: ins } = await sb.from('installments').select('*').eq('sale_id', id).order('seq');
+  let h = `<p class="muted">Phone: ${esc(s.customer_phone)} &middot; CNIC: ${esc(s.customer_cnic)}<br>IMEI: ${esc(s.imei)}<br>Qeemat: ${money(s.price)} &middot; Advance: ${money(s.advance)}</p>`;
+  if (isAdmin) h += `<div class="imgs">${img(s.selfie_path, 'Selfie')}${img(s.cnic_front_path, 'CNIC aage')}${img(s.cnic_back_path, 'CNIC peeche')}</div>`;
+  if (s.status === 'rejected') h += `<div class="note">Reject hui: ${esc(s.reject_reason || '')}</div>`;
+  if (s.status === 'pending') {
+    if (isAdmin) h += `<button class="btn sm" data-act="approveSale" data-id="${id}">Approve</button><button class="btn sm red" data-act="rejectSale" data-id="${id}">Reject</button>`;
+    else h += '<div class="note">Admin ki approval ka intezaar hai. Approve hone par yahan enrollment QR milega.</div>';
+  }
+  if (ins && ins.length) {
+    const paid = ins.filter(i => i.status === 'paid').length;
+    h += `<p><b>${paid} / ${ins.length}</b> qistein ada</p><table><tr><th>#</th><th>Tareekh</th><th>Rakam</th><th></th></tr>` +
+      ins.map(i => `<tr><td>${i.seq}</td><td>${esc(i.due_date)}</td><td>${money(i.amount)}</td><td>${
+        i.status === 'paid' ? '<span class="badge paid">paid</span>' :
+        `${i.status === 'submitted' ? `<span class="badge submitted">TID ${esc(i.txn_id)}</span> ` : ''}<button class="btn sm" data-act="markPaid" data-id="${i.id}" data-sale="${id}" data-seq="${i.seq}">Paid</button>`}</td></tr>`).join('') + '</table>';
+  }
+  if (s.status === 'active') {
+    h += `<button class="btn sm blu" data-act="qr" data-id="${id}">Enrollment QR</button>` +
+      (s.locked ? `<button class="btn sm" data-act="lock" data-id="${id}" data-v="0">Unlock</button>` : `<button class="btn sm red" data-act="lock" data-id="${id}" data-v="1">Lock</button>`);
+  }
+  box.innerHTML = h;
+  loadImgs(box);
+}
+
+/* ---------- QR ---------- */
+function b64urlFromHex(h) {
+  let s = ''; h.match(/../g).forEach(x => s += String.fromCharCode(parseInt(x, 16)));
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function enrollPayload(s) {
+  return {
+    'android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME': 'com.example.installlock/.AdminReceiver',
+    'android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION': CONFIG.APK_URL,
+    'android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM': b64urlFromHex(CONFIG.CERT_SHA256),
+    'android.app.extra.PROVISIONING_SKIP_ENCRYPTION': true,
+    'android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED': true,
+    'android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE': {
+      server: CONFIG.SUPABASE_URL, anon_key: CONFIG.SUPABASE_KEY, sale_id: s.id, token: s.device_token
+    }
+  };
+}
+function showQR(id) {
+  const s = cache.sales[id];
+  const text = JSON.stringify(enrollPayload(s));
+  const m = document.createElement('div'); m.className = 'modal';
+  m.innerHTML = `<div class="box"><h2>${esc(s.customer_name)} ka enrollment QR</h2>
+    <div class="note"><b>Ye QR sirf isi customer ke phone ke liye hai.</b> Kisi aur ko na dikhayein.<br>
+    Naye / factory reset phone ki pehli screen par 6 baar tap karein, phir camera se ye QR scan karein.
+    QR kisi doosre phone ya screen par kholna hoga.</div>
+    <canvas id="qrc"></canvas><button class="btn ghost" data-act="closeModal">Band karein</button></div>`;
+  document.body.appendChild(m);
+  try {
+    const q = qrcode(0, 'L'); q.addData(text, 'Byte'); q.make();
+    const n = q.getModuleCount(), sc = Math.max(3, Math.floor(600 / (n + 8))), size = (n + 8) * sc;
+    const c = $('#qrc'); c.width = c.height = size;
+    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, size, size); x.fillStyle = '#000';
+    for (let r = 0; r < n; r++) for (let k = 0; k < n; k++) if (q.isDark(r, k)) x.fillRect((k + 4) * sc, (r + 4) * sc, sc, sc);
+  } catch (e) { $('#qrc').replaceWith(Object.assign(document.createElement('p'), { textContent: 'QR nahi ban saka: ' + e.message })); }
+}
+
+/* ---------- admin ---------- */
+async function loadAgentsCache() {
+  const { data } = await sb.from('profiles').select('*').eq('role', 'agent').order('created_at', { ascending: false });
+  cache.agents = {}; (data || []).forEach(a => cache.agents[a.id] = a);
+}
+async function showAdmin(t) {
+  curTab = t;
+  const tabs = [['approvals', 'Approvals'], ['sales', 'Sab sales'], ['agents', 'Dukaandar']];
+  render(`<div class="wrap">${header()}<div class="tabs">${tabs.map(([k, l]) =>
+    `<button class="${t === k ? 'on' : ''}" data-act="adminTab" data-t="${k}">${l}</button>`).join('')}</div><div id="body"></div></div>`);
+  await loadAgentsCache();
+  if (t === 'approvals') {
+    const pend = Object.values(cache.agents).filter(a => a.status === 'pending');
+    $('#body').innerHTML = `<h2>Naye dukaandar (${pend.length})</h2>${pend.length ? pend.map(agentCard).join('') : '<div class="card muted">Koi pending dukaandar nahi.</div>'}
+      <h2>Pending sales</h2><div id="sales-box"></div>`;
+    loadImgs($('#body'));
+    await loadSales(true, true);
+  } else if (t === 'sales') await loadSales(true);
+  else {
+    const all = Object.values(cache.agents);
+    $('#body').innerHTML = all.length ? all.map(agentCard).join('') : '<div class="card muted">Abhi koi dukaandar nahi.</div>';
+    loadImgs($('#body'));
+  }
+}
+function agentCard(a) {
+  const btns = {
+    pending: `<button class="btn sm" data-act="agentStatus" data-id="${a.id}" data-v="active">Approve</button><button class="btn sm red" data-act="agentStatus" data-id="${a.id}" data-v="rejected">Reject</button>`,
+    active: `<button class="btn sm red" data-act="agentStatus" data-id="${a.id}" data-v="suspended">Band karein</button>`,
+    suspended: `<button class="btn sm" data-act="agentStatus" data-id="${a.id}" data-v="active">Dobara chalu</button>`,
+    rejected: `<button class="btn sm" data-act="agentStatus" data-id="${a.id}" data-v="active">Approve</button>`
+  }[a.status] || '';
+  return `<div class="card"><div class="sale-h"><div><b>${esc(a.shop_name)}</b><br><small>${esc(a.owner_name)} &middot; ${esc(a.phone)}<br>CNIC: ${esc(a.cnic)}</small></div>
+    <div><span class="badge ${a.status}">${a.status}</span></div></div>
+    <div class="imgs">${img(a.shop_photo_path, 'Dukaan')}${img(a.cnic_photo_path, 'CNIC')}</div>${btns}</div>`;
+}
+
+/* ---------- actions ---------- */
+async function rpc(name, args) {
+  const { error } = await sb.rpc(name, args);
+  if (error) throw new Error(error.message);
+}
+const refreshView = () => me.role === 'admin' ? showAdmin(curTab) : showAgent(curTab);
+
+const H = {
+  goSignup: () => showAuth('signup'),
+  goLogin: () => showAuth('login'),
+  closeModal: () => document.querySelector('.modal')?.remove(),
+  refresh: () => boot(),
+  logout: async () => { await sb.auth.signOut(); me = null; openSet.clear(); showAuth('login'); },
+  login: (d, b) => busy(b, async () => {
+    const { error } = await sb.auth.signInWithPassword({ email: $('#em').value.trim(), password: $('#pw').value });
+    if (error) throw new Error('Email ya password galat hai');
+    await boot();
+  }),
+  signup: (d, b) => busy(b, async () => {
+    const v = id => $(id).value.trim();
+    const need = (c, m) => { if (!c) throw new Error(m); };
+    need(v('#shop') && v('#owner'), 'Dukaan aur apna naam likhein');
+    need(digits(v('#phone')).length >= 10, 'Phone number theek likhein');
+    need(digits(v('#cnic')).length === 13, 'CNIC 13 numbers ka hona chahiye');
+    need($('#f_shop').files[0] && $('#f_cnic').files[0], 'Dukaan aur CNIC ki tasveer lagayein');
+    need(v('#em').includes('@'), 'Email theek likhein');
+    need($('#pw').value.length >= 8, 'Password kam az kam 8 haroof ka hona chahiye');
+    const { data, error } = await sb.auth.signUp({ email: v('#em'), password: $('#pw').value,
+      options: { data: { shop_name: v('#shop'), owner_name: v('#owner'), phone: digits(v('#phone')), cnic: digits(v('#cnic')) } } });
+    if (error) throw new Error(error.message);
+    if (!data.session) { toast('Email confirm karke login karein'); return showAuth('login'); }
+    const uid = data.user.id;
+    const p1 = await uploadPhoto(`${uid}/shop.jpg`, $('#f_shop').files[0]);
+    const p2 = await uploadPhoto(`${uid}/cnic.jpg`, $('#f_cnic').files[0]);
+    await rpc('set_my_docs', { p_shop_photo: p1, p_cnic_photo: p2 });
+    toast('Registration ho gayi. Admin ki approval ka intezaar karein.');
+    await boot();
+  }),
+  agentTab: (d) => showAgent(d.t),
+  adminTab: (d) => showAdmin(d.t),
+  submitSale: (d, b) => busy(b, submitSale),
+  toggle: (d) => {
+    const box = $('#d-' + d.id);
+    if (box.style.display === 'block') { box.style.display = 'none'; openSet.delete(d.id); }
+    else { openSet.add(d.id); openDetail(d.id, me.role === 'admin'); }
+  },
+  qr: (d) => showQR(d.id),
+  markPaid: (d, b) => { if (!confirm(`Qist #${d.seq} ki wasooli confirm karein?`)) return; return busy(b, async () => { await rpc('mark_paid', { p_installment: d.id }); toast('Qist paid ho gayi'); await refreshView(); }); },
+  lock: (d, b) => {
+    const lock = d.v === '1';
+    const msg = lock ? prompt('Customer ko kya message dikhana hai? (khaali chhor sakte hain)', '') : null;
+    if (lock && msg === null) return;
+    return busy(b, async () => { await rpc('set_lock', { p_sale: d.id, p_locked: lock, p_message: msg || null }); toast(lock ? 'Phone lock ho jayega' : 'Phone unlock ho jayega'); await refreshView(); });
+  },
+  approveSale: (d, b) => { if (!confirm('Is sale ko approve karein? Photos aur CNIC check kar liye?')) return; return busy(b, async () => { await rpc('approve_sale', { p_sale: d.id }); toast('Approve ho gayi'); await refreshView(); }); },
+  rejectSale: (d, b) => { const r = prompt('Reject karne ki wajah?'); if (!r) return; return busy(b, async () => { await rpc('reject_sale', { p_sale: d.id, p_reason: r }); toast('Reject ho gayi'); await refreshView(); }); },
+  agentStatus: (d, b) => {
+    const word = { active: 'chalu / approve', suspended: 'band', rejected: 'reject' }[d.v];
+    if (!confirm(`Is dukaandar ko ${word} karein?`)) return;
+    return busy(b, async () => { await rpc('set_agent_status', { p_agent: d.id, p_status: d.v }); toast('Ho gaya'); await refreshView(); });
+  }
+};
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  e.preventDefault();
+  const fn = H[b.dataset.act];
+  if (fn) fn(b.dataset, b);
+});
+document.addEventListener('input', e => {
+  const id = e.target.id;
+  if (id === 'search') {
+    const t = e.target.value.trim().toLowerCase();
+    document.querySelectorAll('#list .sale').forEach(c => c.style.display = c.dataset.hay.includes(t) ? '' : 'none');
+    return;
+  }
+  if (['price', 'adv', 'cnt'].includes(id)) {
+    const amt = $('#amt');
+    if (amt && !amt.dataset.touched) {
+      const p = +$('#price').value, a = +$('#adv').value || 0, c = +$('#cnt').value;
+      if (p > 0 && c > 0 && p > a) amt.value = Math.ceil((p - a) / c);
+    }
+  }
+  if (id === 'amt') e.target.dataset.touched = '1';
+  if (['price', 'adv', 'cnt', 'amt'].includes(id) && $('#sum')) {
+    const p = +$('#price').value, a = +$('#adv').value || 0, c = +$('#cnt').value, m = +$('#amt').value;
+    $('#sum').textContent = (p > 0 && c > 0 && m > 0) ? `Kul wasooli: ${money(a + c * m)} (qeemat ${money(p)})` : '';
+  }
+});
+
+boot();
+</script>
+</body>
+</html>
