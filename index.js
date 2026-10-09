@@ -475,10 +475,23 @@ route('GET', '/api/device/status', async (req, res) => {
   const c = db.prepare('SELECT * FROM customers WHERE device_id = ?').get(device_id);
   if (!c) return send(res, 404, { error: 'device not registered' });
   refreshLockState(c.id);
-  const fresh = db.prepare('SELECT device_locked, status FROM customers WHERE id = ?').get(c.id);
+  const fresh = db.prepare('SELECT device_locked, status, force_lock FROM customers WHERE id = ?').get(c.id);
+  // next_lock_date = the date on/after which the device must be locked if still unpaid.
+  // The app stores this so it can enforce the lock OFFLINE (no internet can't dodge the lock).
+  let next_lock_date = null;
+  if (fresh.force_lock === 1) next_lock_date = today();                 // manual/test lock -> lock now
+  else if (fresh.force_lock === 0) next_lock_date = null;               // manual unlock -> never
+  else if (fresh.status === 'active') {
+    const row = db.prepare('SELECT MIN(due_date) d FROM installments WHERE customer_id=? AND paid=0').get(c.id);
+    next_lock_date = row && row.d ? row.d : null;                       // earliest unpaid due date
+  }
+  const grace_days = Number(process.env.GRACE_DAYS || 2);              // offline tolerance
   send(res, 200, {
     locked: !!fresh.device_locked,
     status: fresh.status,
+    next_lock_date,            // YYYY-MM-DD or null — lock if today >= this date
+    grace_days,                // if offline longer than this many days -> lock
+    server_date: today(),
     message: fresh.device_locked
       ? 'Aapki installment due hai. Bara-e-karam ada karein taake phone unlock ho jaye.'
       : 'OK',
