@@ -157,6 +157,15 @@ CREATE TABLE IF NOT EXISTS pending_devices (
   last_seen    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Uploaded photos live INSIDE the database (not on the local disk) so a single DB backup
+-- preserves everything — records AND images — and nothing is lost when the host restarts.
+CREATE TABLE IF NOT EXISTS images (
+  name         TEXT PRIMARY KEY,                 -- e.g. selfie_1699999999_ab12cd.jpg
+  mime         TEXT NOT NULL,
+  data         BLOB NOT NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_customers_agent ON customers(agent_id);
 CREATE INDEX IF NOT EXISTS idx_inst_customer ON installments(customer_id);
 CREATE INDEX IF NOT EXISTS idx_inst_due ON installments(due_date, paid);
@@ -232,7 +241,9 @@ function saveImage(dataUrl, prefix) {
   if (!m) return null;
   const ext = m[2] === 'jpeg' ? 'jpg' : m[2];
   const name = `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
-  fs.writeFileSync(path.join(UPLOAD_DIR, name), Buffer.from(m[3], 'base64'));
+  const bytes = Buffer.from(m[3], 'base64');
+  // Store the photo in the database so it persists with the DB (survives host restarts/backups).
+  db.prepare('INSERT INTO images (name, mime, data) VALUES (?,?,?)').run(name, m[1], bytes);
   return name;
 }
 
@@ -705,6 +716,12 @@ const server = http.createServer(async (req, res) => {
       }
       if (!user) return send(res, 401, { error: 'unauthorized' });
       const name = path.basename(pathname.slice('/api/files/'.length));
+      // Read the photo from the database (new storage). Fall back to the old on-disk file if present.
+      const row = db.prepare('SELECT mime, data FROM images WHERE name = ?').get(name);
+      if (row) {
+        res.writeHead(200, { 'Content-Type': row.mime || MIME[path.extname(name)] || 'application/octet-stream' });
+        return res.end(Buffer.from(row.data));
+      }
       return serveStatic(res, path.join(UPLOAD_DIR, name));
     }
 

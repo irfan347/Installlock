@@ -1,0 +1,14 @@
+# Litestream continuously backs up the SQLite database to S3-compatible storage
+# (Cloudflare R2 / Backblaze B2). All values come from environment variables set on Render.
+dbs:
+  - path: ${DB_PATH}
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: paymint
+        endpoint: ${LITESTREAM_ENDPOINT}
+        region: ${LITESTREAM_REGION}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        # ship changes quickly so very little can ever be lost
+        sync-interval: 1s
