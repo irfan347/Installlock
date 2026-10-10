@@ -1,0 +1,15 @@
+# Keeps the Render free service awake so it never does a slow cold-start.
+# Pings the server every ~10 minutes. Fully free (runs on GitHub Actions).
+name: keep-alive
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes
+  workflow_dispatch:          # lets you run it manually too
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping server
+        run: |
+          curl -fsS -m 30 https://installlock.onrender.com/api/app/latest > /dev/null \
+            && echo "pinged OK" || echo "ping failed (will retry next run)"
